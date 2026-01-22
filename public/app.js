@@ -8,12 +8,12 @@ const btnSave = document.getElementById('btn-save');
 const botStatusIndicator = document.getElementById('bot-status-indicator');
 const botStatusText = document.getElementById('bot-status-text');
 
-// --- Scrape Info Handling ---
-const scrapeTime = document.getElementById('scrape-time');
-const scrapeTitle = document.getElementById('scrape-title');
-const scrapeCaption = document.getElementById('scrape-caption');
-const scrapeIsTarget = document.getElementById('scrape-is-target');
+// Scrape Info Elements
+const latestScrapeTimeHeader = document.getElementById('latest-scrape-time-header');
+const scrapedItemsList = document.getElementById('scraped-items-list');
 const matchedTargetsList = document.getElementById('matched-targets-list');
+const scrapeCountEl = document.getElementById('scrape-count');
+let totalScrapedCount = 0;
 
 // Load history on startup
 fetch('/api/history')
@@ -31,40 +31,44 @@ fetch('/api/history')
     .catch(err => console.error('Failed to load history:', err));
 
 socket.on('latest-scrape', (data) => {
-    scrapeTime.textContent = data.date;
-    scrapeTitle.textContent = data.title;
-    scrapeCaption.textContent = data.caption;
+    // Update Header Time
+    latestScrapeTimeHeader.textContent = `(${data.date})`;
+
+    // Update Count
+    totalScrapedCount++;
+    if (scrapeCountEl) scrapeCountEl.textContent = totalScrapedCount;
+
+    // Update Scraped Items List
+    if (scrapedItemsList.firstChild && scrapedItemsList.firstChild.textContent === '等待数据...') {
+        scrapedItemsList.innerHTML = '';
+    }
+
+    const li = document.createElement('li');
+    li.style.padding = '5px 0';
+    li.style.borderBottom = '1px dashed #eee';
+    li.style.fontSize = '0.9rem';
+
+    const targetBadge = data.is_target 
+        ? '<span style="color: white; background: green; padding: 2px 6px; border-radius: 4px; font-size: 0.8em; margin-right: 5px;">目标</span>' 
+        : '';
+    
+    // Display Format: [Series] Product Name
+    li.innerHTML = `${targetBadge}<span style="color: #666; margin-right: 5px;">[${data.caption}]</span><span style="color: #333;">${data.title}</span>`;
+    
+    // Prepend to show newest on top
+    scrapedItemsList.prepend(li);
     
     if (data.is_target) {
-        scrapeIsTarget.textContent = '是';
-        scrapeIsTarget.style.color = 'green';
-        scrapeIsTarget.style.fontWeight = 'bold';
-        
-        // Add to list if target
-        if (matchedTargetsList.querySelector('li').textContent === '暂无匹配') {
+        // Add to matched list if target
+        if (matchedTargetsList.querySelector('li') && matchedTargetsList.querySelector('li').textContent === '暂无匹配') {
             matchedTargetsList.innerHTML = '';
         }
         
-        // Check for duplicates in the visual list (optional, but good for UI)
-        // Since we want to show "results", maybe duplicates are fine if they are re-scraped?
-        // But the user said "today's matched items", usually unique items.
-        // However, matched_history.json prevents duplicate processing, so `is_target` might be true,
-        // but it might be skipped by logic.
-        // Wait, `login_bot.js` logic:
-        // If matched and not in history -> add to history -> log.
-        // If matched and in history -> log?
-        // Let's assume we just log what the bot says is a target.
-        
-        const li = document.createElement('li');
-        li.textContent = `[${data.date.split(' ')[1]}] ${data.title}`;
-        li.style.color = 'green';
-        li.style.fontWeight = 'bold';
-        matchedTargetsList.prepend(li); // Newest on top? Or append? User said "result", usually list. Let's prepend.
-        
-    } else {
-        scrapeIsTarget.textContent = '否';
-        scrapeIsTarget.style.color = '#666';
-        scrapeIsTarget.style.fontWeight = 'normal';
+        const matchedLi = document.createElement('li');
+        matchedLi.textContent = `[${data.date.split(' ')[1]}] ${data.title}`;
+        matchedLi.style.color = 'green';
+        matchedLi.style.fontWeight = 'bold';
+        matchedTargetsList.prepend(matchedLi); 
     }
 });
 

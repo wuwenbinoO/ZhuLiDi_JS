@@ -152,12 +152,11 @@
 
     <div class="right-panel">
         <div class="card" style="margin-bottom: 20px; flex: 0 0 auto;">
-            <h2>当前再贩</h2>
-            <div id="latest-scrape-info" style="border-bottom: 1px solid #eee; padding-bottom: 15px; margin-bottom: 15px;">
-                <p style="margin: 5px 0;"><strong>日期时间:</strong> <span id="scrape-time">-</span></p>
-                <p style="margin: 5px 0;"><strong>商品名称:</strong> <span id="scrape-title">-</span></p>
-                <p style="margin: 5px 0;"><strong>商品系列:</strong> <span id="scrape-caption">-</span></p>
-                <p style="margin: 5px 0;"><strong>是否目标:</strong> <span id="scrape-is-target">-</span></p>
+            <h2>当前再贩 <span style="font-size: 0.8rem; font-weight: normal; color: #666; margin-left: 5px;">(Total: <span id="scrape-count">0</span>)</span> <span id="latest-scrape-time-header" style="font-size: 0.8rem; font-weight: normal; color: #666;"></span></h2>
+            <div id="latest-scrape-container" style="border-bottom: 1px solid #eee; padding-bottom: 15px; margin-bottom: 15px;">
+                <ul id="scraped-items-list" style="padding-left: 20px; margin: 0; max-height: 200px; overflow-y: auto; list-style-type: none; padding: 0;">
+                    <li style="color: #999; padding: 5px 0;">等待数据...</li>
+                </ul>
             </div>
             <div>
                 <h3>今日已匹配目标</h3>
