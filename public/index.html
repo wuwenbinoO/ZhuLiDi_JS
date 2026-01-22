@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>JumpShop Bot 控制台</title>
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+            color: #333;
+            display: flex;
+            gap: 20px;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        .left-panel {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            min-height: 0;
+        }
+
+        .right-panel {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            min-height: 0;
+        }
+
+        .card {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            display: flex;
+            flex-direction: column;
+            min-height: 0; /* Important: allows card to shrink below content size */
+        }
+
+        h2 {
+            margin-top: 0;
+            font-size: 1.2rem;
+            border-bottom: 2px solid #eee;
+            padding-bottom: 10px;
+            flex-shrink: 0;
+        }
+
+        /* ... buttons ... */
+        .btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 1rem;
+            font-weight: bold;
+            transition: background 0.2s;
+            color: white;
+            margin-right: 10px;
+            margin-bottom: 10px;
+        }
+
+        .btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        .btn-blue { background-color: #007bff; }
+        .btn-blue:hover { background-color: #0056b3; }
+
+        .btn-green { background-color: #28a745; }
+        .btn-green:hover { background-color: #218838; }
+
+        .btn-red { background-color: #dc3545; }
+        .btn-red:hover { background-color: #c82333; }
+
+        .status-indicator {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            margin-right: 5px;
+        }
+        .status-running { background-color: #28a745; box-shadow: 0 0 5px #28a745; }
+        .status-stopped { background-color: #dc3545; }
+
+        #log-container {
+            flex: 1;
+            background: #1e1e1e;
+            color: #d4d4d4;
+            padding: 10px;
+            border-radius: 4px;
+            overflow-y: auto;
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-size: 0.9rem;
+            white-space: pre-wrap;
+            word-break: break-all;
+            min-height: 0;
+        }
+
+        textarea {
+            width: 100%;
+            flex: 1;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-family: monospace;
+            resize: none;
+            min-height: 200px;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="left-panel">
+        <div class="card">
+            <h2>控制面板</h2>
+            <div style="margin-bottom: 20px;">
+                <p><strong>第一步：启动环境</strong></p>
+                <button id="btn-chrome" class="btn btn-blue">启动 Chrome 调试模式</button>
+                <p class="text-muted" style="font-size: 0.8rem; margin-top: 5px;">* 如果 Chrome 已打开，请先关闭。</p>
+            </div>
+            
+            <div>
+                <p><strong>第二步：机器人操作</strong></p>
+                <div style="margin-bottom: 10px;">
+                    状态: <span id="bot-status-indicator" class="status-indicator status-stopped"></span>
+                    <span id="bot-status-text">未运行</span>
+                </div>
+                <button id="btn-start" class="btn btn-green">启动机器人</button>
+                <button id="btn-stop" class="btn btn-red" disabled>停止机器人</button>
+            </div>
+        </div>
+
+        <div class="card" style="flex: 1; display: flex; flex-direction: column;">
+            <h2>运行日志</h2>
+            <div id="log-container"></div>
+            <div style="margin-top: 5px; text-align: right;">
+                <button onclick="document.getElementById('log-container').innerHTML=''" style="padding: 5px 10px; font-size: 0.8rem;">清空日志</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="right-panel">
+        <div class="card" style="margin-bottom: 20px; flex: 0 0 auto;">
+            <h2>最新爬取信息</h2>
+            <div id="latest-scrape-info" style="border-bottom: 1px solid #eee; padding-bottom: 15px; margin-bottom: 15px;">
+                <p style="margin: 5px 0;"><strong>时间:</strong> <span id="scrape-time">-</span></p>
+                <p style="margin: 5px 0;"><strong>商品:</strong> <span id="scrape-title">-</span></p>
+                <p style="margin: 5px 0;"><strong>系列:</strong> <span id="scrape-caption">-</span></p>
+                <p style="margin: 5px 0;"><strong>目标:</strong> <span id="scrape-is-target">-</span></p>
+            </div>
+            <div>
+                <h3>今日已匹配目标</h3>
+                <ul id="matched-targets-list" style="padding-left: 20px; margin: 0; max-height: 150px; overflow-y: auto;">
+                    <!-- List items will be added here -->
+                    <li style="color: #999;">暂无匹配</li>
+                </ul>
+            </div>
+        </div>
+
+        <div class="card" style="flex: 1; display: flex; flex-direction: column;">
+            <h2>目标商品配置 (targets.json)</h2>
+            <p style="font-size: 0.9rem; color: #666;">每行输入一个目标商品名称，点击保存生效。</p>
+            <textarea id="config-editor"></textarea>
+            <div style="margin-top: 10px;">
+                <button id="btn-save" class="btn btn-blue">保存配置</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
