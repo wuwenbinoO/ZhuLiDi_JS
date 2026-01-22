@@ -206,7 +206,7 @@ async function runScrapeTask(page) {
             // --- 发送结构化数据 ---
             const logData = {
                 type: 'scraped_item',
-                date: new Date().toLocaleString(),
+                date: new Date().toLocaleString('zh-CN', { hour12: false }),
                 caption: p.caption,
                 title: p.title,
                 is_target: targets.includes(p.title)
