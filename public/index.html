@@ -27,6 +27,8 @@
             flex-direction: column;
             gap: 20px;
             min-height: 0;
+            overflow-y: auto; /* Allow scrolling */
+            padding-right: 5px; /* Prevent scrollbar overlapping content */
         }
 
         .right-panel {
@@ -35,6 +37,31 @@
             flex-direction: column;
             gap: 20px;
             min-height: 0;
+            overflow-y: auto; /* Allow scrolling */
+            padding-right: 5px; /* Prevent scrollbar overlapping content */
+        }
+
+        .config-container {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            flex: 1; /* Take remaining height */
+            min-height: 0; /* Enable shrinking */
+        }
+
+        /* Custom Scrollbar for Webkit */
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #f1f1f1; 
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #ccc; 
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #aaa; 
         }
 
         .card {
@@ -110,12 +137,21 @@
         textarea {
             width: 100%;
             flex: 1;
-            padding: 10px;
+            padding: 12px;
             border: 1px solid #ddd;
             border-radius: 4px;
-            font-family: monospace;
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-size: 14px;
+            line-height: 1.6;
             resize: none;
             min-height: 200px;
+            background-color: #fafafa;
+            color: #333;
+        }
+        textarea:focus {
+            outline: none;
+            border-color: #007bff;
+            background-color: #fff;
         }
     </style>
 </head>
@@ -151,28 +187,62 @@
     </div>
 
     <div class="right-panel">
-        <div class="card" style="margin-bottom: 20px; flex: 0 0 auto;">
+        <div class="card" style="margin-bottom: 20px; flex: 0 0 auto; max-height: 40vh; display: flex; flex-direction: column;">
             <h2>当前再贩 <span style="font-size: 0.8rem; font-weight: normal; color: #666; margin-left: 5px;">(Total: <span id="scrape-count">0</span>)</span> <span id="latest-scrape-time-header" style="font-size: 0.8rem; font-weight: normal; color: #666;"></span></h2>
-            <div id="latest-scrape-container" style="border-bottom: 1px solid #eee; padding-bottom: 15px; margin-bottom: 15px;">
-                <ul id="scraped-items-list" style="padding-left: 20px; margin: 0; max-height: 200px; overflow-y: auto; list-style-type: none; padding: 0;">
+            <div id="latest-scrape-container" style="border-bottom: 1px solid #eee; padding-bottom: 15px; margin-bottom: 15px; flex: 1; min-height: 0; display: flex; flex-direction: column;">
+                <ul id="scraped-items-list" style="padding-left: 20px; margin: 0; overflow-y: auto; list-style-type: none; padding: 0; flex: 1;">
                     <li style="color: #999; padding: 5px 0;">等待数据...</li>
                 </ul>
             </div>
-            <div>
-                <h3>今日已匹配目标</h3>
-                <ul id="matched-targets-list" style="padding-left: 20px; margin: 0; max-height: 150px; overflow-y: auto;">
+            <div style="flex: 1; min-height: 0; display: flex; flex-direction: column;">
+                <h3 style="margin-top: 0;">今日已匹配目标</h3>
+                <ul id="matched-targets-list" style="padding-left: 20px; margin: 0; overflow-y: auto; flex: 1;">
                     <!-- List items will be added here -->
                     <li style="color: #999;">暂无匹配</li>
                 </ul>
             </div>
         </div>
 
-        <div class="card" style="flex: 1; display: flex; flex-direction: column;">
-            <h2>目标商品配置 (targets.json)</h2>
-            <p style="font-size: 0.9rem; color: #666;">每行输入一个目标商品名称，点击保存生效。</p>
-            <textarea id="config-editor"></textarea>
-            <div style="margin-top: 10px;">
-                <button id="btn-save" class="btn btn-blue">保存配置</button>
+        <div class="config-container">
+            <div class="card" style="flex: 1; display: flex; flex-direction: column; min-height: 200px;">
+                <h2>目标商品配置</h2>
+                <p style="font-size: 0.9rem; color: #666;">每行输入一个目标商品名称，点击保存生效。</p>
+                <textarea id="config-editor" placeholder="在此输入目标商品名称，每行一个..."></textarea>
+                <div style="margin-top: 10px; display: flex; align-items: center;">
+                    <button id="btn-save" class="btn btn-blue">保存配置</button>
+                    <span id="save-status" style="color: green; margin-left: 10px; opacity: 0; transition: opacity 0.5s;">✅ 已保存</span>
+                </div>
+            </div>
+
+            <div class="card" style="flex: 0 0 auto;">
+                <div style="display: flex; justify-content: space-between; align-items: center; cursor: pointer; border-bottom: 2px solid #eee; padding-bottom: 10px; margin-bottom: 15px;" onclick="toggleMailConfig()">
+                    <h2 style="margin: 0; border: none; padding: 0;">邮件通知配置</h2>
+                    <span id="mail-config-toggle-icon" style="font-size: 0.8rem; transform: rotate(0deg); transition: transform 0.3s;">▼</span>
+                </div>
+                <div id="mail-config-content">
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+                        <div style="grid-column: 1 / -1;">
+                            <label style="font-size: 0.9rem; font-weight: bold; display: block; margin-bottom: 5px;">服务商 (Service)</label>
+                            <input type="text" id="mail-service" value="qq" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                        </div>
+                        <div>
+                            <label style="font-size: 0.9rem; font-weight: bold; display: block; margin-bottom: 5px;">邮箱账号 (User)</label>
+                            <input type="text" id="mail-user" placeholder="例如: 873270383@qq.com" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                        </div>
+                        <div>
+                            <label style="font-size: 0.9rem; font-weight: bold; display: block; margin-bottom: 5px;">授权码 (Pass)</label>
+                            <input type="password" id="mail-pass" placeholder="SMTP授权码" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                        </div>
+                        <div style="grid-column: 1 / -1;">
+                            <label style="font-size: 0.9rem; font-weight: bold; display: block; margin-bottom: 5px;">收件人 (To)</label>
+                            <input type="text" id="mail-to" placeholder="接收通知的邮箱地址" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                        </div>
+                    </div>
+                    <div style="margin-top: 15px; display: flex; align-items: center;">
+                        <button id="btn-save-mail" class="btn btn-blue">保存邮件配置</button>
+                        <span id="mail-save-status" style="color: green; margin-left: 10px; opacity: 0; transition: opacity 0.5s;">✅ 已保存</span>
+                    </div>
+                </div>
             </div>
         </div>
     </div>

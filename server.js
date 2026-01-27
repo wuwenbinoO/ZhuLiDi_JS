@@ -12,6 +12,7 @@ const io = new Server(server);
 
 const PORT = 3000;
 const TARGETS_PATH = path.join(__dirname, 'targets.json');
+const MAIL_CONFIG_PATH = path.join(__dirname, 'mail_config.json');
 
 app.use(express.static('public'));
 app.use(bodyParser.json());
@@ -21,6 +22,30 @@ let botProcess = null;
 const MATCHED_HISTORY_FILE = path.join(__dirname, 'matched_history.json');
 
 // --- Routes ---
+
+// 0. Get/Save Mail Config
+app.get('/api/mail-config', (req, res) => {
+    if (fs.existsSync(MAIL_CONFIG_PATH)) {
+        try {
+            const data = fs.readFileSync(MAIL_CONFIG_PATH, 'utf8');
+            res.json(JSON.parse(data));
+        } catch (e) {
+            res.status(500).json({ error: 'Failed to read mail config' });
+        }
+    } else {
+        // Default
+        res.json({ service: 'qq', user: '', pass: '', to: '' });
+    }
+});
+
+app.post('/api/mail-config', (req, res) => {
+    try {
+        fs.writeFileSync(MAIL_CONFIG_PATH, JSON.stringify(req.body, null, 2));
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
 
 // Get Matched History
 app.get('/api/history', (req, res) => {
@@ -37,7 +62,7 @@ app.get('/api/history', (req, res) => {
     }
 });
 
-// Get targets
+// 1. Get Targets
 app.get('/api/targets', (req, res) => {
     try {
         if (fs.existsSync(TARGETS_PATH)) {
@@ -122,6 +147,10 @@ app.post('/api/start-bot', (req, res) => {
                     const jsonData = JSON.parse(jsonStr);
                     if (jsonData.type === 'scraped_item') {
                         io.emit('latest-scrape', jsonData);
+                    } else if (jsonData.type === 'new_round') {
+                        io.emit('new-round', jsonData);
+                    } else if (jsonData.type === 'matched_item') {
+                        io.emit('matched-item', jsonData);
                     }
                 } catch (e) {
                     console.error('Error parsing JSON_DATA:', e);

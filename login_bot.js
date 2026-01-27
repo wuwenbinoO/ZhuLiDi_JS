@@ -4,15 +4,97 @@ const fs = require('fs');
 const path = require('path');
 const http = require('http');
 
+const nodemailer = require('nodemailer');
+
 puppeteer.use(StealthPlugin());
 
 const COOKIES_PATH = path.join(__dirname, 'cookies.json');
 const TARGETS_PATH = path.join(__dirname, 'targets.json');
 const HISTORY_PATH = path.join(__dirname, 'matched_history.json');
+const MAIL_CONFIG_PATH = path.join(__dirname, 'mail_config.json');
 const USER_DATA_DIR = process.env.CHROME_USER_DATA_DIR || path.join(process.env.LOCALAPPDATA, 'Google\\Chrome\\User Data');
 const TARGET_URL = 'https://jumpshop-online.com/account';
 const EXECUTABLE_PATH = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
 const ACCEPT_LANGUAGE = 'ja,en-US;q=0.9,en;q=0.8';
+
+// --- 全局状态 ---
+let lastRoundItems = new Map(); // Key: title, Value: caption
+let lastEmailDate = '';
+
+// --- 邮件发送函数 ---
+async function sendEmail(currentItemsMap, newItems, matchedItemsList, isFirstRun) {
+    if (!fs.existsSync(MAIL_CONFIG_PATH)) {
+        console.log('未找到邮件配置文件，跳过邮件发送。');
+        return;
+    }
+    
+    let config;
+    try {
+        config = JSON.parse(fs.readFileSync(MAIL_CONFIG_PATH, 'utf8'));
+    } catch (e) {
+        console.error('读取邮件配置失败:', e);
+        return;
+    }
+
+    if (!config.pass) {
+        console.log('邮件配置缺少授权码(pass)，跳过发送。');
+        return;
+    }
+
+    const transporter = nodemailer.createTransport({
+        service: config.service || 'qq',
+        auth: {
+            user: config.user,
+            pass: config.pass
+        }
+    });
+
+    // 构建邮件内容
+    let htmlContent = `<h2>当前再贩列表 (总数: ${currentItemsMap.size})</h2><ul>`;
+    
+    // 1. 当前再贩列表 (标注新增)
+    for (const [title, caption] of currentItemsMap) {
+        // 如果是每日首次运行，则不标记 NEW；否则检查是否在 newItems 中
+        const isNew = !isFirstRun && newItems.some(item => item.title === title);
+        const style = isNew ? 'color: red; font-weight: bold;' : '';
+        const tag = isNew ? ' [NEW]' : '';
+        htmlContent += `<li style="${style}">【${caption}】${title}${tag}</li>`;
+    }
+    htmlContent += '</ul>';
+
+    // 2. 今日已匹配
+    htmlContent += '<h2>今日已匹配目标</h2><ul>';
+    if (matchedItemsList.length > 0) {
+        matchedItemsList.forEach(item => {
+            let title, caption;
+            if (typeof item === 'string') {
+                title = item;
+                caption = currentItemsMap.get(title) || '未知IP';
+            } else {
+                title = item.title;
+                caption = item.caption || currentItemsMap.get(title) || '未知IP';
+            }
+            htmlContent += `<li><span style="color: green;">【${caption}】${title}</span></li>`;
+        });
+    } else {
+        htmlContent += '<li>暂无匹配</li>';
+    }
+    htmlContent += '</ul>';
+
+    const mailOptions = {
+        from: config.user,
+        to: config.to,
+        subject: `JumpShop 再贩通知 - ${new Date().toLocaleString()}`,
+        html: htmlContent
+    };
+
+    try {
+        const info = await transporter.sendMail(mailOptions);
+        console.log('📧 邮件发送成功:', info.messageId);
+    } catch (error) {
+        console.error('❌ 邮件发送失败:', error);
+    }
+}
 
 // --- 辅助函数 ---
 
@@ -27,7 +109,13 @@ function loadHistory() {
             const data = JSON.parse(fs.readFileSync(HISTORY_PATH, 'utf8'));
             const today = getTodayDate();
             if (data.date === today) {
-                return new Set(data.items || []);
+                const items = data.items || [];
+                const titles = new Set();
+                items.forEach(item => {
+                    if (typeof item === 'string') titles.add(item);
+                    else if (item && item.title) titles.add(item.title);
+                });
+                return titles;
             }
         }
     } catch (e) {
@@ -39,18 +127,24 @@ function loadHistory() {
 function saveHistory(item) {
     try {
         const today = getTodayDate();
-        let currentItems = new Set();
+        let currentItems = [];
         if (fs.existsSync(HISTORY_PATH)) {
             const data = JSON.parse(fs.readFileSync(HISTORY_PATH, 'utf8'));
             if (data.date === today) {
-                currentItems = new Set(data.items || []);
+                currentItems = data.items || [];
             }
         }
-        currentItems.add(item);
-        fs.writeFileSync(HISTORY_PATH, JSON.stringify({
-            date: today,
-            items: Array.from(currentItems)
-        }, null, 2));
+        
+        // item is { title, caption }
+        // Check duplicates
+        const exists = currentItems.some(i => i.title === item.title);
+        if (!exists) {
+            currentItems.push(item);
+            fs.writeFileSync(HISTORY_PATH, JSON.stringify({
+                date: today,
+                items: currentItems
+            }, null, 2));
+        }
     } catch (e) {
         console.error('保存历史记录失败:', e);
     }
@@ -164,11 +258,15 @@ async function runScrapeTask(page) {
 
     // --- 爬取逻辑 ---
     console.log('--- 开始爬取商品信息 ---');
+    console.log('JSON_DATA:' + JSON.stringify({ type: 'new_round' }));
     
     let hasNextPage = true;
     let pageCount = 1;
     const visitedUrls = new Set();
     visitedUrls.add(page.url());
+
+    // 本轮收集的商品
+    let currentRoundItems = new Map();
 
     while (hasNextPage) {
         console.log(`正在爬取第 ${pageCount} 页...`);
@@ -216,9 +314,15 @@ async function runScrapeTask(page) {
 
             console.log(`[P${pageCount}-${i + 1}] 【IP】：『${p.caption}』【商品名称】：『${p.title}』`);
             
+            // 收集商品信息到本轮 Map
+            currentRoundItems.set(p.title, p.caption);
+
             if (targets.includes(p.title)) {
                  console.log(`\n🎉 发现目标商品: ${p.title}`);
                  
+                 // Emit matched item event
+                 console.log('JSON_DATA:' + JSON.stringify({ type: 'matched_item', title: p.title, caption: p.caption }));
+
                  if (matchedHistory.has(p.title)) {
                      console.log('⚠️ 该商品今日已匹配过，跳过处理。');
                      continue;
@@ -230,7 +334,7 @@ async function runScrapeTask(page) {
                      
                      try {
                          await executeAddToCart(page, p.title);
-                         saveHistory(p.title);
+                         saveHistory({ title: p.title, caption: p.caption });
                          console.log('📝 已记录到今日匹配历史。');
                          
                          console.log('⏳ 等待 5 秒...');
@@ -285,6 +389,49 @@ async function runScrapeTask(page) {
             hasNextPage = false;
         }
     }
+
+    // --- 邮件发送逻辑 ---
+    try {
+        const today = getTodayDate();
+        const isFirstRun = lastEmailDate !== today;
+        
+        // 找出新增项
+        const newItems = [];
+        for (const [title, caption] of currentRoundItems) {
+            if (!lastRoundItems.has(title)) {
+                newItems.push({ title, caption });
+            }
+        }
+
+        console.log(`本轮统计: 总数 ${currentRoundItems.size}, 新增 ${newItems.length}, 每日首次: ${isFirstRun}`);
+
+        if (isFirstRun || newItems.length > 0) {
+            console.log('准备发送邮件通知...');
+            
+            // 获取今日匹配历史
+            let matchedItems = [];
+            try {
+                if (fs.existsSync(HISTORY_PATH)) {
+                    const hData = JSON.parse(fs.readFileSync(HISTORY_PATH, 'utf8'));
+                    if (hData.date === today) {
+                        matchedItems = hData.items || [];
+                    }
+                }
+            } catch (e) { console.error('读取历史出错', e); }
+
+            await sendEmail(currentRoundItems, newItems, matchedItems, isFirstRun);
+            
+            lastEmailDate = today;
+        } else {
+            console.log('无新增商品且非每日首次，跳过发送邮件。');
+        }
+
+        // 更新上一轮数据
+        lastRoundItems = currentRoundItems;
+
+    } catch (mailErr) {
+        console.error('邮件逻辑执行出错:', mailErr);
+    }
 }
 
 // --- Main ---
@@ -322,7 +469,16 @@ async function runScrapeTask(page) {
     }
 
     const pages = await browser.pages();
-    const page = pages.length > 0 ? pages[0] : await browser.newPage();
+    let page = pages.length > 0 ? pages[0] : await browser.newPage();
+    
+    // 验证页面是否可用
+    try {
+        await page.evaluate(() => 1);
+    } catch (e) {
+        console.log('⚠️ 初始页面不可用，正在创建新页面...');
+        page = await browser.newPage();
+    }
+
     await page.setExtraHTTPHeaders({ 'Accept-Language': ACCEPT_LANGUAGE });
 
     // 1. Load cookies
@@ -334,7 +490,27 @@ async function runScrapeTask(page) {
                 await page.setCookie(...cookies);
                 console.log('Cookie 加载完成');
             }
-        } catch (error) { console.error('Cookie 加载失败:', error); }
+        } catch (error) { 
+            console.error('Cookie 加载失败:', error);
+            // 如果是因为页面关闭导致的错误，尝试恢复
+            if (error.message && (error.message.includes('Target closed') || error.message.includes('Protocol error'))) {
+                console.log('⚠️ 页面连接已断开，正在重新创建页面并重试...');
+                try {
+                    // 尝试创建新页面
+                    page = await browser.newPage();
+                    await page.setExtraHTTPHeaders({ 'Accept-Language': ACCEPT_LANGUAGE });
+                    
+                    // 重试加载 Cookie
+                    const cookies = JSON.parse(fs.readFileSync(COOKIES_PATH));
+                    if (cookies.length > 0) {
+                        await page.setCookie(...cookies);
+                        console.log('Cookie 重新加载完成');
+                    }
+                } catch (retryError) {
+                    console.error('Cookie 重试加载失败，将继续以无 Cookie 模式运行:', retryError);
+                }
+            }
+        }
     }
 
     console.log('等待用户操作，请手动访问目标网站并登录...');
@@ -370,12 +546,10 @@ async function runScrapeTask(page) {
             console.log('\n--- 开始新一轮任务循环 ---');
             await runScrapeTask(page);
             console.log('✅ 本轮任务结束。');
-            console.log('⏳ 5分钟后开始下一轮...');
+            console.log('⏳ 1分钟后开始下一轮...');
             
             // 简单的倒计时日志
-            // await new Promise(r => setTimeout(r, 5 * 60 * 1000));
-            for(let m=5; m>0; m--) {
-                // console.log(`还剩 ${m} 分钟...`); 
+            for(let m=1; m>0; m--) {
                 await new Promise(r => setTimeout(r, 60 * 1000));
             }
 

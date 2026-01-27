@@ -16,19 +16,38 @@ const scrapeCountEl = document.getElementById('scrape-count');
 let totalScrapedCount = 0;
 
 // Load history on startup
-fetch('/api/history')
-    .then(res => res.json())
-    .then(data => {
-        if (data && data.items && data.items.length > 0) {
-            matchedTargetsList.innerHTML = ''; // Clear default message
-            data.items.forEach(title => {
-                const li = document.createElement('li');
-                li.textContent = `[历史] ${title}`;
-                matchedTargetsList.appendChild(li);
-            });
-        }
-    })
-    .catch(err => console.error('Failed to load history:', err));
+// fetch('/api/history')
+//     .then(res => res.json())
+//     .then(data => {
+//         if (data && data.items && data.items.length > 0) {
+//             matchedTargetsList.innerHTML = ''; // Clear default message
+//             data.items.forEach(title => {
+//                 const li = document.createElement('li');
+//                 li.textContent = `[历史] ${title}`;
+//                 matchedTargetsList.appendChild(li);
+//             });
+//         }
+//     })
+//     .catch(err => console.error('Failed to load history:', err));
+
+function startNewRound() {
+    // Clear Scraped Items List
+    scrapedItemsList.innerHTML = '<li style="color: #999; padding: 5px 0;">等待数据...</li>';
+    totalScrapedCount = 0;
+    if (scrapeCountEl) scrapeCountEl.textContent = totalScrapedCount;
+}
+
+socket.on('new-round', () => {
+    startNewRound();
+    
+    // Log
+    const div = document.createElement('div');
+    div.textContent = `[${new Date().toLocaleTimeString()}] --- 新一轮数据开始 ---`;
+    div.style.color = '#888';
+    div.style.fontStyle = 'italic';
+    logContainer.appendChild(div);
+    logContainer.scrollTop = logContainer.scrollHeight;
+});
 
 socket.on('latest-scrape', (data) => {
     // Update Header Time
@@ -63,17 +82,34 @@ socket.on('latest-scrape', (data) => {
         if (matchedTargetsList.querySelector('li') && matchedTargetsList.querySelector('li').textContent === '暂无匹配') {
             matchedTargetsList.innerHTML = '';
         }
+
+        // Check for duplicates
+        const existingItems = Array.from(matchedTargetsList.querySelectorAll('li'));
+        const isDuplicate = existingItems.some(item => {
+            // item.textContent format: "[10:00:11] Product Title"
+            // We want to match the "Product Title" part
+            const text = item.textContent;
+            const match = text.match(/^\[.*?\]\s+(.*)$/);
+            return match && match[1] === data.title;
+        });
         
-        const matchedLi = document.createElement('li');
-        matchedLi.textContent = `[${data.date.split(' ')[1]}] ${data.title}`;
-        matchedLi.style.color = 'green';
-        matchedLi.style.fontWeight = 'bold';
-        matchedTargetsList.prepend(matchedLi); 
+        if (!isDuplicate) {
+            const matchedLi = document.createElement('li');
+            matchedLi.textContent = `[${data.date.split(' ')[1]}] ${data.title}`;
+            matchedLi.style.color = 'green';
+            matchedLi.style.fontWeight = 'bold';
+            matchedTargetsList.prepend(matchedLi); 
+        }
     }
 });
 
 // --- Log Handling ---
 socket.on('log', (msg) => {
+    // Fallback: Check for start of new round via log message (if server.js wasn't restarted)
+    if (typeof msg === 'string' && msg.includes('--- 开始爬取商品信息 ---')) {
+        startNewRound();
+    }
+
     const div = document.createElement('div');
     div.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
     logContainer.appendChild(div);
@@ -148,6 +184,8 @@ btnSave.addEventListener('click', async () => {
         .map(line => line.trim())
         .filter(line => line.length > 0);
     
+    const statusEl = document.getElementById('save-status');
+    
     try {
         const res = await fetch('/api/targets', {
             method: 'POST',
@@ -156,14 +194,103 @@ btnSave.addEventListener('click', async () => {
         });
         const result = await res.json();
         if (result.success) {
-            alert('配置已保存！');
+            statusEl.textContent = '✅ 配置已保存！';
+            statusEl.style.color = 'green';
+            statusEl.style.opacity = 1;
+            setTimeout(() => { statusEl.style.opacity = 0; }, 2000);
         } else {
-            alert('保存失败: ' + result.error);
+            statusEl.textContent = '❌ 保存失败: ' + result.error;
+            statusEl.style.color = 'red';
+            statusEl.style.opacity = 1;
         }
     } catch (e) {
-        alert('保存出错: ' + e.message);
+        statusEl.textContent = '❌ 保存出错: ' + e.message;
+        statusEl.style.color = 'red';
+        statusEl.style.opacity = 1;
     }
 });
 
 // Initial Load
 loadConfig();
+
+// --- Mail Config ---
+const mailServiceEl = document.getElementById('mail-service');
+const mailUserEl = document.getElementById('mail-user');
+const mailPassEl = document.getElementById('mail-pass');
+const mailToEl = document.getElementById('mail-to');
+const btnSaveMail = document.getElementById('btn-save-mail');
+const mailSaveStatus = document.getElementById('mail-save-status');
+
+async function loadMailConfig() {
+    try {
+        const res = await fetch('/api/mail-config');
+        const data = await res.json();
+        if (data) {
+            mailServiceEl.value = data.service || 'qq';
+            mailUserEl.value = data.user || '';
+            mailPassEl.value = data.pass || '';
+            mailToEl.value = data.to || '';
+
+            // If configured (has user), collapse by default to save space
+            if (data.user) {
+                toggleMailConfig(false);
+            }
+        }
+    } catch (e) {
+        console.error('Failed to load mail config', e);
+    }
+}
+
+// Toggle Mail Config
+window.toggleMailConfig = function(forceState) {
+    const content = document.getElementById('mail-config-content');
+    const icon = document.getElementById('mail-config-toggle-icon');
+    
+    if (!content || !icon) return;
+
+    const isHidden = content.style.display === 'none';
+    // If forceState is provided, use it (true=show, false=hide). Otherwise toggle.
+    const shouldShow = forceState !== undefined ? forceState : isHidden;
+    
+    if (shouldShow) {
+        content.style.display = 'block';
+        icon.style.transform = 'rotate(0deg)';
+    } else {
+        content.style.display = 'none';
+        icon.style.transform = 'rotate(-90deg)';
+    }
+};
+
+btnSaveMail.addEventListener('click', async () => {
+    const config = {
+        service: mailServiceEl.value.trim(),
+        user: mailUserEl.value.trim(),
+        pass: mailPassEl.value.trim(),
+        to: mailToEl.value.trim()
+    };
+    
+    try {
+        const res = await fetch('/api/mail-config', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(config)
+        });
+        const result = await res.json();
+        if (result.success) {
+            mailSaveStatus.textContent = '✅ 配置已保存！';
+            mailSaveStatus.style.color = 'green';
+            mailSaveStatus.style.opacity = 1;
+            setTimeout(() => { mailSaveStatus.style.opacity = 0; }, 2000);
+        } else {
+            mailSaveStatus.textContent = '❌ 保存失败: ' + result.error;
+            mailSaveStatus.style.color = 'red';
+            mailSaveStatus.style.opacity = 1;
+        }
+    } catch (e) {
+        mailSaveStatus.textContent = '❌ 保存出错: ' + e.message;
+        mailSaveStatus.style.color = 'red';
+        mailSaveStatus.style.opacity = 1;
+    }
+});
+
+loadMailConfig();
