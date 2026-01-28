@@ -3,7 +3,7 @@ const logContainer = document.getElementById('log-container');
 const btnChrome = document.getElementById('btn-chrome');
 const btnStart = document.getElementById('btn-start');
 const btnStop = document.getElementById('btn-stop');
-const configEditor = document.getElementById('config-editor');
+// const configEditor = document.getElementById('config-editor'); // Removed
 const btnSave = document.getElementById('btn-save');
 const botStatusIndicator = document.getElementById('bot-status-indicator');
 const botStatusText = document.getElementById('bot-status-text');
@@ -165,32 +165,96 @@ btnStop.addEventListener('click', async () => {
 });
 
 // Load Config
+const targetsTbody = document.getElementById('targets-tbody');
+const targetNameInput = document.getElementById('target-name-input');
+const targetQtyInput = document.getElementById('target-qty-input');
+const btnAddTarget = document.getElementById('btn-add-target');
+let currentTargets = [];
+
+function renderTargets() {
+    targetsTbody.innerHTML = '';
+    currentTargets.forEach((item, index) => {
+        const tr = document.createElement('tr');
+        tr.style.borderBottom = '1px solid #eee';
+        
+        let title, quantity;
+        if (typeof item === 'string') {
+            title = item;
+            quantity = 'Max';
+        } else {
+            title = item.title;
+            quantity = item.quantity || 'Max';
+        }
+
+        tr.innerHTML = `
+            <td style="padding: 8px;">${title}</td>
+            <td style="padding: 8px; text-align: center;">${quantity}</td>
+            <td style="padding: 8px; text-align: right;">
+                <button onclick="deleteTarget(${index})" style="background: transparent; color: #dc3545; border: 1px solid #dc3545; border-radius: 4px; padding: 2px 6px; cursor: pointer; font-size: 0.8rem;">×</button>
+            </td>
+        `;
+        targetsTbody.appendChild(tr);
+    });
+}
+
 async function loadConfig() {
     try {
         const res = await fetch('/api/targets');
         const data = await res.json();
         if (Array.isArray(data)) {
-            configEditor.value = data.join('\n');
+            currentTargets = data;
+            renderTargets();
         }
     } catch (e) {
         console.error('Failed to load config', e);
     }
 }
 
+// Add Target
+btnAddTarget.addEventListener('click', () => {
+    const name = targetNameInput.value.trim();
+    const qtyStr = targetQtyInput.value.trim();
+    
+    if (!name) {
+        alert('请输入商品名称');
+        return;
+    }
+
+    let newItem;
+    if (qtyStr) {
+        const qty = parseInt(qtyStr, 10);
+        if (isNaN(qty) || qty < 1) {
+            alert('请输入有效的数量');
+            return;
+        }
+        newItem = { title: name, quantity: qty };
+    } else {
+        newItem = name; // Save as string if no quantity, for simplicity/backward compat
+    }
+
+    currentTargets.push(newItem);
+    renderTargets();
+
+    targetNameInput.value = '';
+    targetNameInput.focus();
+    targetQtyInput.value = '';
+});
+
+// Delete Target (Global)
+window.deleteTarget = function(index) {
+    currentTargets.splice(index, 1);
+    renderTargets();
+};
+
 // Save Config
 btnSave.addEventListener('click', async () => {
-    const text = configEditor.value;
-    const items = text.split('\n')
-        .map(line => line.trim())
-        .filter(line => line.length > 0);
-    
     const statusEl = document.getElementById('save-status');
     
     try {
         const res = await fetch('/api/targets', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(items)
+            body: JSON.stringify(currentTargets)
         });
         const result = await res.json();
         if (result.success) {
@@ -294,3 +358,150 @@ btnSaveMail.addEventListener('click', async () => {
 });
 
 loadMailConfig();
+
+// --- Scheduled Tasks Logic ---
+socket.on('scheduled-tasks-updated', (tasks) => {
+    if (Array.isArray(tasks)) {
+        scheduledTasks = tasks;
+        renderTasks();
+        
+        // Log update
+        const div = document.createElement('div');
+        div.textContent = `[${new Date().toLocaleTimeString()}] 定时任务状态已更新`;
+        div.style.color = '#17a2b8'; // info blue
+        logContainer.appendChild(div);
+        logContainer.scrollTop = logContainer.scrollHeight;
+    }
+});
+
+const tasksTbody = document.getElementById('scheduled-tasks-tbody');
+const taskNameInput = document.getElementById('task-name');
+const taskDateInput = document.getElementById('task-date');
+const taskTimeInput = document.getElementById('task-time');
+const taskQtyInput = document.getElementById('task-qty');
+const btnAddTask = document.getElementById('btn-add-task');
+const btnSaveTasks = document.getElementById('btn-save-tasks');
+const taskSaveStatus = document.getElementById('task-save-status');
+
+let scheduledTasks = [];
+
+// Helper to generate UUID
+function uuidv4() {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+    var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
+    return v.toString(16);
+  });
+}
+
+// Render Tasks
+function renderTasks() {
+    tasksTbody.innerHTML = '';
+    scheduledTasks.forEach((task, index) => {
+        const tr = document.createElement('tr');
+        tr.style.borderBottom = '1px solid #eee';
+        
+        const fulfilledText = task.fulfilledQuantity > 0 ? `(已买${task.fulfilledQuantity})` : '';
+        const statusColor = task.fulfilledQuantity >= task.targetQuantity ? 'green' : 'black';
+        
+        tr.innerHTML = `
+            <td style="padding: 6px 8px; overflow: hidden; text-overflow: ellipsis; max-width: 150px;" title="${task.productName}">${task.productName}</td>
+            <td style="padding: 6px 8px;">
+                <div style="font-size: 0.85rem;">${task.targetDate}</div>
+                <div style="font-size: 0.8rem; color: #666;">${task.targetTime}</div>
+            </td>
+            <td style="padding: 6px 8px; text-align: center; color: ${statusColor}; font-weight: bold;">
+                ${task.targetQuantity} 
+                <span style="font-size: 0.8em; font-weight: normal; color: #666;">${fulfilledText}</span>
+            </td>
+            <td style="padding: 6px 8px; text-align: right;">
+                <button onclick="deleteTask('${task.id}')" style="background: transparent; color: #dc3545; border: 1px solid #dc3545; border-radius: 4px; padding: 2px 6px; cursor: pointer; font-size: 0.8rem;">×</button>
+            </td>
+        `;
+        tasksTbody.appendChild(tr);
+    });
+}
+
+// Load Tasks
+async function loadTasks() {
+    try {
+        const res = await fetch('/api/scheduled-tasks');
+        const data = await res.json();
+        if (Array.isArray(data)) {
+            scheduledTasks = data;
+            renderTasks();
+        }
+    } catch (e) {
+        console.error('Failed to load scheduled tasks', e);
+    }
+}
+
+// Add Task
+btnAddTask.addEventListener('click', () => {
+    const name = taskNameInput.value.trim();
+    const date = taskDateInput.value;
+    const time = taskTimeInput.value;
+    const qty = parseInt(taskQtyInput.value, 10);
+
+    if (!name || !date || !time || isNaN(qty) || qty < 1) {
+        alert('请填写完整有效的任务信息');
+        return;
+    }
+
+    scheduledTasks.push({
+        id: uuidv4(),
+        productName: name,
+        targetDate: date,
+        targetTime: time,
+        targetQuantity: qty,
+        fulfilledQuantity: 0,
+        status: 'pending'
+    });
+
+    renderTasks();
+    
+    // Clear inputs
+    taskNameInput.value = '';
+    taskNameInput.focus();
+    // taskDateInput.value = ''; // Keep date for convenience
+    // taskTimeInput.value = '';
+    taskQtyInput.value = '1';
+});
+
+// Init Date to Today
+const today = new Date().toISOString().split('T')[0];
+if (taskDateInput) taskDateInput.value = today;
+
+// Delete Task (Global function for onclick)
+window.deleteTask = function(id) {
+    scheduledTasks = scheduledTasks.filter(t => t.id !== id);
+    renderTasks();
+};
+
+// Save Tasks
+btnSaveTasks.addEventListener('click', async () => {
+    try {
+        const res = await fetch('/api/scheduled-tasks', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(scheduledTasks)
+        });
+        const result = await res.json();
+        if (result.success) {
+            taskSaveStatus.textContent = '✅ 已保存！';
+            taskSaveStatus.style.color = 'green';
+            taskSaveStatus.style.opacity = 1;
+            setTimeout(() => { taskSaveStatus.style.opacity = 0; }, 2000);
+        } else {
+            taskSaveStatus.textContent = '❌ 保存失败';
+            taskSaveStatus.style.color = 'red';
+            taskSaveStatus.style.opacity = 1;
+        }
+    } catch (e) {
+        console.error(e);
+        taskSaveStatus.textContent = '❌ 出错';
+        taskSaveStatus.style.opacity = 1;
+    }
+});
+
+// Init
+loadTasks();

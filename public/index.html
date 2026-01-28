@@ -45,8 +45,8 @@
             display: flex;
             flex-direction: column;
             gap: 20px;
-            flex: 1; /* Take remaining height */
-            min-height: 0; /* Enable shrinking */
+            flex: 0 0 auto; /* Allow shrinking/growing based on content, not filling space */
+            min-height: 0;
         }
 
         /* Custom Scrollbar for Webkit */
@@ -136,15 +136,14 @@
 
         textarea {
             width: 100%;
-            flex: 1;
+            height: 300px; /* Default height */
             padding: 12px;
             border: 1px solid #ddd;
             border-radius: 4px;
             font-family: 'Consolas', 'Monaco', monospace;
             font-size: 14px;
             line-height: 1.6;
-            resize: none;
-            min-height: 200px;
+            resize: vertical; /* Allow user to resize */
             background-color: #fafafa;
             color: #333;
         }
@@ -160,20 +159,70 @@
     <div class="left-panel">
         <div class="card">
             <h2>控制面板</h2>
-            <div style="margin-bottom: 20px;">
-                <p><strong>第一步：启动环境</strong></p>
-                <button id="btn-chrome" class="btn btn-blue">启动 Chrome 调试模式</button>
-                <p class="text-muted" style="font-size: 0.8rem; margin-top: 5px;">* 如果 Chrome 已打开，请先关闭。</p>
-            </div>
-            
-            <div>
-                <p><strong>第二步：机器人操作</strong></p>
-                <div style="margin-bottom: 10px;">
-                    状态: <span id="bot-status-indicator" class="status-indicator status-stopped"></span>
-                    <span id="bot-status-text">未运行</span>
+            <div style="display: flex; flex-wrap: wrap; gap: 20px;">
+                <div style="flex: 0 0 auto;">
+                    <div style="margin-bottom: 20px;">
+                        <p><strong>第一步：启动环境</strong></p>
+                        <button id="btn-chrome" class="btn btn-blue">启动 Chrome 调试模式</button>
+                        <p class="text-muted" style="font-size: 0.8rem; margin-top: 5px;">* 如果 Chrome 已打开，请先关闭。</p>
+                    </div>
+                    
+                    <div>
+                        <p><strong>第二步：机器人操作</strong></p>
+                        <div style="margin-bottom: 10px;">
+                            状态: <span id="bot-status-indicator" class="status-indicator status-stopped"></span>
+                            <span id="bot-status-text">未运行</span>
+                        </div>
+                        <button id="btn-start" class="btn btn-green">启动机器人</button>
+                        <button id="btn-stop" class="btn btn-red" disabled>停止机器人</button>
+                    </div>
                 </div>
-                <button id="btn-start" class="btn btn-green">启动机器人</button>
-                <button id="btn-stop" class="btn btn-red" disabled>停止机器人</button>
+                
+                <div style="flex: 1.2; border-left: 1px solid #eee; padding-left: 20px; display: flex; flex-direction: column; min-width: 320px;">
+                    <h3 style="margin-top: 0; font-size: 1rem; border-bottom: 1px solid #eee; padding-bottom: 5px; margin-bottom: 10px;">
+                        新品定时任务配置
+                        <small style="font-weight: normal; font-size: 0.8em; color: #888; margin-left: 5px;">(自动执行)</small>
+                    </h3>
+                    
+                    <!-- 列表区域 -->
+                    <div style="overflow-x: auto; flex: 1; border: 1px solid #eee; border-radius: 4px; margin-bottom: 10px; background: #fff;">
+                        <table style="width: 100%; border-collapse: collapse; font-size: 0.9rem; white-space: nowrap;">
+                            <thead>
+                                <tr style="background: #f9f9f9; text-align: left;">
+                                    <th style="padding: 6px 8px; border-bottom: 2px solid #ddd;">商品名称</th>
+                                    <th style="padding: 6px 8px; border-bottom: 2px solid #ddd;">时间</th>
+                                    <th style="padding: 6px 8px; border-bottom: 2px solid #ddd; text-align: center;">数量</th>
+                                    <th style="padding: 6px 8px; border-bottom: 2px solid #ddd; width: 40px;"></th>
+                                </tr>
+                            </thead>
+                            <tbody id="scheduled-tasks-tbody"></tbody>
+                        </table>
+                    </div>
+
+                    <!-- 输入区域：紧凑布局 -->
+                    <div style="background: #f8f9fa; padding: 10px; border-radius: 4px; border: 1px solid #e9ecef;">
+                        <div style="margin-bottom: 8px;">
+                            <input type="text" id="task-name" placeholder="输入目标商品名称 (支持模糊匹配)..." style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box; font-size: 0.9rem;">
+                        </div>
+                        <div style="display: flex; gap: 8px;">
+                            <input type="date" id="task-date" style="flex: 2; padding: 6px; border: 1px solid #ddd; border-radius: 4px; font-size: 0.9rem;">
+                            <input type="time" id="task-time" style="flex: 1.5; padding: 6px; border: 1px solid #ddd; border-radius: 4px; font-size: 0.9rem;">
+                            <input type="number" id="task-qty" placeholder="数量" min="1" value="1" style="width: 50px; padding: 6px; border: 1px solid #ddd; border-radius: 4px; text-align: center; font-size: 0.9rem;">
+                            <button id="btn-add-task" class="btn btn-green" style="margin: 0; padding: 0 12px; display: flex; align-items: center; justify-content: center;" title="添加任务">
+                                <span style="font-size: 1.2rem; line-height: 1; font-weight: bold;">+</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- 底部操作 -->
+                    <div style="margin-top: 10px; display: flex; align-items: center; justify-content: space-between;">
+                        <span style="font-size: 0.8rem; color: #888;">* 任务到期自动优先执行</span>
+                        <div style="display: flex; align-items: center;">
+                            <span id="task-save-status" style="color: green; margin-right: 10px; opacity: 0; transition: opacity 0.5s; font-size: 0.9rem;">✅ 已保存</span>
+                            <button id="btn-save-tasks" class="btn btn-blue" style="margin: 0; padding: 6px 15px; font-size: 0.9rem;">保存更改</button>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
 
@@ -187,9 +236,9 @@
     </div>
 
     <div class="right-panel">
-        <div class="card" style="margin-bottom: 20px; flex: 0 0 auto; max-height: 40vh; display: flex; flex-direction: column;">
+        <div class="card" style="margin-bottom: 20px; flex: 1; display: flex; flex-direction: column; min-height: 500px;">
             <h2>当前再贩 <span style="font-size: 0.8rem; font-weight: normal; color: #666; margin-left: 5px;">(Total: <span id="scrape-count">0</span>)</span> <span id="latest-scrape-time-header" style="font-size: 0.8rem; font-weight: normal; color: #666;"></span></h2>
-            <div id="latest-scrape-container" style="border-bottom: 1px solid #eee; padding-bottom: 15px; margin-bottom: 15px; flex: 1; min-height: 0; display: flex; flex-direction: column;">
+            <div id="latest-scrape-container" style="border-bottom: 1px solid #eee; padding-bottom: 15px; margin-bottom: 15px; flex: 3; min-height: 0; display: flex; flex-direction: column;">
                 <ul id="scraped-items-list" style="padding-left: 20px; margin: 0; overflow-y: auto; list-style-type: none; padding: 0; flex: 1;">
                     <li style="color: #999; padding: 5px 0;">等待数据...</li>
                 </ul>
@@ -204,15 +253,41 @@
         </div>
 
         <div class="config-container">
-            <div class="card" style="flex: 1; display: flex; flex-direction: column; min-height: 200px;">
+            <div class="card" style="display: flex; flex-direction: column;">
                 <h2>目标商品配置</h2>
-                <p style="font-size: 0.9rem; color: #666;">每行输入一个目标商品名称，点击保存生效。</p>
-                <textarea id="config-editor" placeholder="在此输入目标商品名称，每行一个..."></textarea>
+                <p style="font-size: 1.0rem; color: #666;">配置监听再贩商品中的目标商品及期望购买数量。</p>
+                
+                <!-- List -->
+                <div style="overflow-x: auto; flex: 1; border: 1px solid #eee; border-radius: 4px; margin-bottom: 10px; background: #fff; min-height: 200px;">
+                    <table style="width: 100%; border-collapse: collapse; font-size: 0.9rem;">
+                        <thead>
+                            <tr style="background: #f9f9f9; text-align: left;">
+                                <th style="padding: 8px; border-bottom: 2px solid #ddd;">商品名称</th>
+                                <th style="padding: 8px; border-bottom: 2px solid #ddd; width: 80px; text-align: center;">数量</th>
+                                <th style="padding: 8px; border-bottom: 2px solid #ddd; width: 50px;"></th>
+                            </tr>
+                        </thead>
+                        <tbody id="targets-tbody"></tbody>
+                    </table>
+                </div>
+
+                <!-- Input -->
+                <div style="background: #f8f9fa; padding: 10px; border-radius: 4px; border: 1px solid #e9ecef; margin-bottom: 10px;">
+                    <div style="display: flex; gap: 8px;">
+                        <input type="text" id="target-name-input" placeholder="输入商品名称..." style="flex: 1; padding: 8px; border: 1px solid #ddd; border-radius: 4px; font-size: 0.9rem;">
+                        <input type="number" id="target-qty-input" placeholder="Max" min="1" style="width: 70px; padding: 8px; border: 1px solid #ddd; border-radius: 4px; text-align: center; font-size: 0.9rem;">
+                        <button id="btn-add-target" class="btn btn-green" style="margin: 0; padding: 0 15px; display: flex; align-items: center; justify-content: center;">+</button>
+                    </div>
+                    <div style="font-size: 0.8rem; color: #999; margin-top: 5px;">* 数量Max表示购买单笔最大可买数量</div>
+                </div>
+
                 <div style="margin-top: 10px; display: flex; align-items: center;">
                     <button id="btn-save" class="btn btn-blue">保存配置</button>
                     <span id="save-status" style="color: green; margin-left: 10px; opacity: 0; transition: opacity 0.5s;">✅ 已保存</span>
                 </div>
             </div>
+
+
 
             <div class="card" style="flex: 0 0 auto;">
                 <div style="display: flex; justify-content: space-between; align-items: center; cursor: pointer; border-bottom: 2px solid #eee; padding-bottom: 10px; margin-bottom: 15px;" onclick="toggleMailConfig()">

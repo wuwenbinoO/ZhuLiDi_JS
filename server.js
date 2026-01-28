@@ -12,6 +12,7 @@ const io = new Server(server);
 
 const PORT = 3000;
 const TARGETS_PATH = path.join(__dirname, 'targets.json');
+const TASKS_PATH = path.join(__dirname, 'scheduled_tasks.json');
 const MAIL_CONFIG_PATH = path.join(__dirname, 'mail_config.json');
 
 app.use(express.static('public'));
@@ -81,11 +82,49 @@ app.post('/api/targets', (req, res) => {
     try {
         const newTargets = req.body;
         if (!Array.isArray(newTargets)) {
-            return res.status(400).json({ error: 'Data must be an array of strings.' });
+            return res.status(400).json({ error: 'Data must be an array.' });
+        }
+        // Validate items
+        const isValid = newTargets.every(item => 
+            typeof item === 'string' || (typeof item === 'object' && item !== null && typeof item.title === 'string')
+        );
+        if (!isValid) {
+            return res.status(400).json({ error: 'Items must be strings or objects with a "title" property.' });
         }
         fs.writeFileSync(TARGETS_PATH, JSON.stringify(newTargets, null, 2), 'utf8');
         res.json({ success: true });
     } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// 2.5 Get/Save Scheduled Tasks
+app.get('/api/scheduled-tasks', (req, res) => {
+    try {
+        if (fs.existsSync(TASKS_PATH)) {
+            const data = fs.readFileSync(TASKS_PATH, 'utf8');
+            res.json(JSON.parse(data));
+        } else {
+            res.json([]);
+        }
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.post('/api/scheduled-tasks', (req, res) => {
+    try {
+        const tasks = req.body;
+        console.log('Received scheduled tasks update:', JSON.stringify(tasks));
+        if (!Array.isArray(tasks)) {
+            console.error('Error: Data is not an array', tasks);
+            return res.status(400).json({ error: 'Data must be an array of tasks.' });
+        }
+        fs.writeFileSync(TASKS_PATH, JSON.stringify(tasks, null, 2), 'utf8');
+        console.log('Successfully saved tasks to', TASKS_PATH);
+        res.json({ success: true });
+    } catch (e) {
+        console.error('Error saving tasks:', e);
         res.status(500).json({ error: e.message });
     }
 });
@@ -151,6 +190,8 @@ app.post('/api/start-bot', (req, res) => {
                         io.emit('new-round', jsonData);
                     } else if (jsonData.type === 'matched_item') {
                         io.emit('matched-item', jsonData);
+                    } else if (jsonData.type === 'tasks_updated') {
+                        io.emit('scheduled-tasks-updated', jsonData.tasks);
                     }
                 } catch (e) {
                     console.error('Error parsing JSON_DATA:', e);

@@ -10,6 +10,7 @@ puppeteer.use(StealthPlugin());
 
 const COOKIES_PATH = path.join(__dirname, 'cookies.json');
 const TARGETS_PATH = path.join(__dirname, 'targets.json');
+const TASKS_PATH = path.join(__dirname, 'scheduled_tasks.json');
 const HISTORY_PATH = path.join(__dirname, 'matched_history.json');
 const MAIL_CONFIG_PATH = path.join(__dirname, 'mail_config.json');
 const USER_DATA_DIR = process.env.CHROME_USER_DATA_DIR || path.join(process.env.LOCALAPPDATA, 'Google\\Chrome\\User Data');
@@ -66,15 +67,17 @@ async function sendEmail(currentItemsMap, newItems, matchedItemsList, isFirstRun
     htmlContent += '<h2>今日已匹配目标</h2><ul>';
     if (matchedItemsList.length > 0) {
         matchedItemsList.forEach(item => {
-            let title, caption;
+            let title, caption, quantity;
             if (typeof item === 'string') {
                 title = item;
                 caption = currentItemsMap.get(title) || '未知IP';
             } else {
                 title = item.title;
                 caption = item.caption || currentItemsMap.get(title) || '未知IP';
+                quantity = item.quantity;
             }
-            htmlContent += `<li><span style="color: green;">【${caption}】${title}</span></li>`;
+            const qtyStr = quantity ? ` (x${quantity})` : '';
+            htmlContent += `<li><span style="color: green;">【${caption}】${title}${qtyStr}</span></li>`;
         });
     } else {
         htmlContent += '<li>暂无匹配</li>';
@@ -124,7 +127,7 @@ function loadHistory() {
     return new Set();
 }
 
-function saveHistory(item) {
+function saveHistory(item, quantity = 1) {
     try {
         const today = getTodayDate();
         let currentItems = [];
@@ -139,7 +142,11 @@ function saveHistory(item) {
         // Check duplicates
         const exists = currentItems.some(i => i.title === item.title);
         if (!exists) {
-            currentItems.push(item);
+            currentItems.push({ 
+                ...item, 
+                quantity: quantity, 
+                matchedAt: new Date().toLocaleString() 
+            });
             fs.writeFileSync(HISTORY_PATH, JSON.stringify({
                 date: today,
                 items: currentItems
@@ -157,25 +164,232 @@ async function isElementVisible(el) {
     });
 }
 
+// --- 定时任务逻辑 ---
+
+function loadScheduledTasks() {
+    try {
+        if (fs.existsSync(TASKS_PATH)) {
+            return JSON.parse(fs.readFileSync(TASKS_PATH, 'utf8'));
+        }
+    } catch (e) {
+        console.error('读取定时任务失败:', e);
+    }
+    return [];
+}
+
+function updateScheduledTask(updatedTask) {
+    try {
+        let tasks = loadScheduledTasks();
+        const idx = tasks.findIndex(t => t.id === updatedTask.id);
+        if (idx !== -1) {
+            tasks[idx] = updatedTask;
+            fs.writeFileSync(TASKS_PATH, JSON.stringify(tasks, null, 2));
+            // Emit update event
+            console.log('JSON_DATA:' + JSON.stringify({ type: 'tasks_updated', tasks: tasks }));
+        }
+    } catch (e) {
+        console.error('更新定时任务失败:', e);
+    }
+}
+
+async function executeScheduledTask(page, task) {
+    console.log(`🚀 开始执行定时任务: [${task.productName}]`);
+    
+    // 1. 跳转到首页
+    await page.goto('https://jumpshop-online.com/', { waitUntil: 'domcontentloaded', timeout: 60000 });
+
+    // 2. 跳转到 "新着アイテム"
+    console.log('正在查找“新着アイテム”...');
+    const newItemsLinkXPath = '//h2[contains(text(), "新着アイテム")]/following-sibling::a';
+    let newItemsHref = null;
+    try {
+        const linkElement = await page.waitForSelector('xpath/' + newItemsLinkXPath, { timeout: 5000 });
+        if (linkElement) {
+            newItemsHref = await page.evaluate(el => el.href, linkElement);
+        }
+    } catch (e) {
+        console.warn('“新着アイテム”链接查找失败。', e.message);
+        return;
+    }
+
+    if (!newItemsHref) {
+        console.log('❌ 未找到“新着アイテム”链接，任务中止。');
+        return;
+    }
+
+    await page.goto(newItemsHref, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    console.log('✅ 已跳转到“新着アイテム”页面');
+
+    // 3. 爬取并匹配
+    let taskCompleted = false;
+    let pageCount = 1;
+    const visitedUrls = new Set();
+    visitedUrls.add(page.url());
+    let hasNextPage = true;
+
+    while (hasNextPage && !taskCompleted) {
+        console.log(`[定时任务] 正在扫描第 ${pageCount} 页...`);
+        
+        try {
+            await page.waitForSelector('.card-information__wrapper', { timeout: 5000 });
+        } catch (e) {
+            console.log('[定时任务] 未检测到商品信息，跳出循环。');
+            break;
+        }
+
+        const products = await page.evaluate(() => {
+            const items = [];
+            const wrappers = document.querySelectorAll('.card-information__wrapper');
+            wrappers.forEach(wrapper => {
+                const titleEl = wrapper.querySelector('.card-information__text.h5');
+                const captionEl = wrapper.querySelector('.caption-with-letter-spacing.light');
+                if (titleEl) {
+                    const title = titleEl.innerText.trim();
+                    const caption = captionEl ? captionEl.innerText.trim() : '';
+                    const linkEl = wrapper.closest('a');
+                    const href = linkEl ? linkEl.href : '';
+                    items.push({ title, caption, href });
+                }
+            });
+            return items;
+        });
+
+        const currentListPageUrl = page.url();
+
+        for (const p of products) {
+            if (p.title.includes(task.productName)) { // 模糊匹配
+                console.log(`\n🎉 [定时任务] 发现目标商品: ${p.title}`);
+                
+                if (!p.href) {
+                    console.log('❌ [定时任务] 商品无链接，跳过。');
+                    continue;
+                }
+
+                // 循环下单直到满足数量
+                while (task.fulfilledQuantity < task.targetQuantity) {
+                    console.log(`[定时任务] 当前进度: ${task.fulfilledQuantity}/${task.targetQuantity}`);
+                    
+                    await page.goto(p.href, { waitUntil: 'domcontentloaded' });
+                    
+                    try {
+                        const qtyBought = await executeAddToCart(page, p.title);
+                        const checkoutSuccess = await executeCheckout(page);
+                        
+                        if (checkoutSuccess) {
+                            task.fulfilledQuantity = parseInt(task.fulfilledQuantity || 0, 10) + parseInt(qtyBought, 10);
+                            updateScheduledTask(task);
+                            console.log(`✅ [定时任务] 下单成功 (+${qtyBought})，累计: ${task.fulfilledQuantity}/${task.targetQuantity}`);
+                        } else {
+                            console.log('⚠️ [定时任务] 下单未确认成功。');
+                            // break loop or retry? Assume retry or move on to next item if blocked.
+                            // To avoid infinite loop on failure, we might break this inner loop
+                            break; 
+                        }
+
+                        console.log('⏳ 等待 5 秒...');
+                        await new Promise(r => setTimeout(r, 5000));
+
+                    } catch (err) {
+                        console.error('❌ [定时任务] 下单流程出错:', err);
+                        break; // Stop trying this item if error occurs
+                    }
+                }
+
+                if (task.fulfilledQuantity >= task.targetQuantity) {
+                    console.log('✅ [定时任务] 目标数量已达成！');
+                    taskCompleted = true;
+                    task.status = 'completed';
+                    updateScheduledTask(task);
+                    try {
+                        saveHistory({ title: p.title, caption: p.caption }, task.fulfilledQuantity);
+                        console.log('📝 [定时任务] 已记录到今日匹配历史。');
+                    } catch(e) {}
+                    break; 
+                }
+                
+                // Return to list for next item check
+                await page.goto(currentListPageUrl, { waitUntil: 'domcontentloaded' });
+            }
+        }
+
+        if (taskCompleted) break;
+
+        // Next page
+        const nextButtonSelectors = [
+            'a[aria-label="次のページ"]',
+            '//a[@aria-label="次のページ"]',
+            '//a[contains(text(), "次へ")]'
+        ];
+        let nextButton = null;
+        for (const selector of nextButtonSelectors) {
+             try {
+                if (selector.startsWith('//')) {
+                    const [el] = await page.$$( 'xpath/' + selector);
+                    if (el && await isElementVisible(el)) { nextButton = el; break; }
+                } else {
+                    const el = await page.$(selector);
+                    if (el && await isElementVisible(el)) { nextButton = el; break; }
+                }
+            } catch (e) {}
+        }
+
+        if (nextButton) {
+            const nextUrl = await page.evaluate(el => el.href, nextButton);
+            if (nextUrl && !visitedUrls.has(nextUrl) && nextUrl !== page.url()) {
+                await page.goto(nextUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+                visitedUrls.add(nextUrl);
+                pageCount++;
+                await new Promise(r => setTimeout(r, 1000));
+            } else {
+                 hasNextPage = false;
+            }
+        } else {
+            hasNextPage = false;
+        }
+    }
+    
+    console.log(`🏁 定时任务 [${task.productName}] 执行结束。`);
+}
+
 // --- 核心逻辑 ---
 
-async function executeAddToCart(page, title) {
+async function executeAddToCart(page, title, targetQuantity = null) {
     console.log('正在执行添加购物车流程...');
+    let quantity = 1;
     
     // 1. 设置数量
     const quantityInputSelector = 'input[name="quantity"]';
     try {
        await page.waitForSelector(quantityInputSelector, { timeout: 10000 });
-       const maxQuantity = await page.$eval(quantityInputSelector, el => el.max || 1);
+       const maxQuantity = await page.$eval(quantityInputSelector, el => parseInt(el.max || 1, 10));
        console.log(`检测到最大购买数量: ${maxQuantity}`);
-       await page.$eval(quantityInputSelector, (el, max) => {
-           el.value = max;
+       
+       let buyQuantity = maxQuantity;
+       if (targetQuantity) {
+           const targetQtyInt = parseInt(targetQuantity, 10);
+           if (maxQuantity < targetQtyInt) {
+               console.log(`⚠️ 库存(${maxQuantity}) < 目标(${targetQtyInt})，将购买当前最大可买数量。`);
+               buyQuantity = maxQuantity;
+           } else {
+               buyQuantity = targetQtyInt;
+               console.log(`根据配置，将购买数量设置为: ${buyQuantity}`);
+           }
+       } else {
+           console.log(`未配置特定数量，默认购买最大数量: ${buyQuantity}`);
+       }
+
+       await page.$eval(quantityInputSelector, (el, qty) => {
+           el.value = qty;
            el.dispatchEvent(new Event('input', { bubbles: true }));
            el.dispatchEvent(new Event('change', { bubbles: true }));
-       }, maxQuantity);
-       console.log(`已将购买数量设置为: ${maxQuantity}`);
+       }, buyQuantity);
+       quantity = buyQuantity;
+       console.log(`已将购买数量设置为: ${quantity}`);
     } catch (e) {
-        console.log('未找到数量输入框，尝试直接添加...');
+        if (e.message.startsWith('QUANTITY_INSUFFICIENT')) {
+            throw e;
+        }
+        console.log('未找到数量输入框或设置失败，尝试直接添加...');
     }
 
    // 2. 点击加入购物车
@@ -215,9 +429,70 @@ async function executeAddToCart(page, title) {
    } else {
        throw new Error('未找到可点击的"加入购物车"按钮');
    }
+
+   return quantity;
+}
+
+async function executeCheckout(page) {
+    console.log('正在跳转到购物车页面...');
+    // 1. 跳转到购物车结算页面
+    await page.goto('https://jumpshop-online.com/cart', { waitUntil: 'domcontentloaded', timeout: 60000 });
+    
+    console.log('正在查找并点击"ご購入手続きへ"按钮...');
+    // 2. 点击前往购买手续按钮
+    try {
+        const checkoutBtn = await page.waitForSelector('#checkout', { timeout: 10000 });
+        // Ensure visible
+        await checkoutBtn.evaluate(el => el.scrollIntoView());
+        await checkoutBtn.click();
+        console.log('✅ 已点击结算按钮，等待跳转...');
+    } catch (e) {
+        throw new Error('未找到结算按钮 (id="checkout")');
+    }
+
+    // 3. 在结算页面识别立即支付按钮
+    console.log('正在等待结算页面加载及支付按钮...');
+    try {
+        const payBtnSelector = '#checkout-pay-button';
+        await page.waitForSelector(payBtnSelector, { timeout: 30000 });
+        console.log('✅ 检测到立即支付按钮，下单成功！');
+        return true;
+    } catch (e) {
+        console.log('❌ 未检测到支付按钮（超时），可能需要人工确认。');
+        return false;
+    }
 }
 
 async function runScrapeTask(page) {
+    // 0. 检查是否有定时任务需要执行
+    const allTasks = loadScheduledTasks();
+    const now = new Date();
+    
+    console.log(`[定时任务检查] 当前时间: ${now.toLocaleString()}，已配置任务数: ${allTasks.length}`);
+
+    // 过滤出：未完成 && 达到时间点的任务
+    // task.targetDate (YYYY-MM-DD), task.targetTime (HH:MM)
+    const pendingTasks = allTasks.filter(t => {
+        const isCompleted = t.status === 'completed' || t.fulfilledQuantity >= t.targetQuantity;
+        if (isCompleted) return false;
+        
+        const taskTime = new Date(`${t.targetDate}T${t.targetTime}`);
+        const isTime = now >= taskTime;
+        
+        console.log(`  - 任务 [${t.productName}]: 目标时间 ${taskTime.toLocaleString()} | 是否到期: ${isTime ? '✅' : '❌'}`);
+        return isTime;
+    });
+
+    if (pendingTasks.length > 0) {
+        console.log(`🕒 发现 ${pendingTasks.length} 个到期的定时任务，优先执行...`);
+        for (const task of pendingTasks) {
+            await executeScheduledTask(page, task);
+        }
+        console.log('✅ 所有定时任务执行完毕，继续常规爬取。');
+    } else {
+        console.log('[定时任务检查] 无到期任务，继续常规流程。');
+    }
+
     // 1. 跳转到首页
     console.log('正在跳转到首页...');
     await page.goto('https://jumpshop-online.com/', { waitUntil: 'domcontentloaded', timeout: 60000 });
@@ -301,13 +576,20 @@ async function runScrapeTask(page) {
         for (let i = 0; i < products.length; i++) {
             const p = products[i];
             
+            // Find target config
+            const targetConfig = targets.find(t => {
+                const targetTitle = (typeof t === 'string') ? t : t.title;
+                return targetTitle === p.title;
+            });
+            const isTarget = !!targetConfig;
+
             // --- 发送结构化数据 ---
             const logData = {
                 type: 'scraped_item',
                 date: new Date().toLocaleString('zh-CN', { hour12: false }),
                 caption: p.caption,
                 title: p.title,
-                is_target: targets.includes(p.title)
+                is_target: isTarget
             };
             console.log('JSON_DATA:' + JSON.stringify(logData));
             // ---------------------
@@ -317,7 +599,7 @@ async function runScrapeTask(page) {
             // 收集商品信息到本轮 Map
             currentRoundItems.set(p.title, p.caption);
 
-            if (targets.includes(p.title)) {
+            if (isTarget) {
                  console.log(`\n🎉 发现目标商品: ${p.title}`);
                  
                  // Emit matched item event
@@ -328,25 +610,43 @@ async function runScrapeTask(page) {
                      continue;
                  }
 
+                 const targetQuantity = (typeof targetConfig === 'object') ? targetConfig.quantity : null;
+
                  if (p.href) {
                      console.log(`准备跳转到: ${p.href}`);
-                     await page.goto(p.href, { waitUntil: 'domcontentloaded' });
-                     
-                     try {
-                         await executeAddToCart(page, p.title);
-                         saveHistory({ title: p.title, caption: p.caption });
-                         console.log('📝 已记录到今日匹配历史。');
-                         
-                         console.log('⏳ 等待 5 秒...');
-                         await new Promise(r => setTimeout(r, 5000));
-                         
-                         console.log('🔙 返回商品列表页...');
-                         await page.goto(currentListPageUrl, { waitUntil: 'domcontentloaded' });
-                         
-                     } catch (cartErr) {
-                         console.error('❌ 添加购物车流程出错:', cartErr);
-                         try { await page.goto(currentListPageUrl, { waitUntil: 'domcontentloaded' }); } catch(e) {}
+                     let purchasedTotal = 0;
+                     let attempt = 0;
+                     while (!targetQuantity || purchasedTotal < targetQuantity) {
+                         attempt++;
+                         await page.goto(p.href, { waitUntil: 'domcontentloaded' });
+                         try {
+                             const quantity = await executeAddToCart(page, p.title, targetQuantity);
+                             const checkoutSuccess = await executeCheckout(page);
+                             if (checkoutSuccess) {
+                                 purchasedTotal += parseInt(quantity, 10);
+                                 const progressText = targetQuantity ? `，累计: ${purchasedTotal}/${targetQuantity}` : '';
+                                 console.log(`✅ 下单成功 (+${quantity})${progressText}`);
+                                 if (!targetQuantity || purchasedTotal >= targetQuantity) {
+                                     saveHistory({ title: p.title, caption: p.caption }, purchasedTotal);
+                                     console.log('📝 目标数量已达成，记录到今日匹配历史。');
+                                     break;
+                                 } else {
+                                     console.log('继续尝试购买以达到目标数量...');
+                                     console.log('⏳ 等待 5 秒...');
+                                     await new Promise(r => setTimeout(r, 5000));
+                                     continue;
+                                 }
+                             } else {
+                                 console.log('⚠️ 下单流程未完全确认（未找到支付按钮），停止本商品重试以避免循环。');
+                                 break;
+                             }
+                         } catch (cartErr) {
+                             console.error('❌ 加购/下单流程出错:', cartErr);
+                             break;
+                         }
                      }
+                     console.log('🔙 返回商品列表页...');
+                     try { await page.goto(currentListPageUrl, { waitUntil: 'domcontentloaded' }); } catch(e) {}
                  } else {
                      console.log('❌ 未找到该商品的链接，无法跳转。');
                  }
